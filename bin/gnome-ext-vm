@@ -1,0 +1,751 @@
+#!/usr/bin/env bash
+# gnome-ext-vm: VM-based functional testing for GNOME Shell extensions.
+#
+# Usage: gnome-ext-vm [--config FILE] <command> [options]
+# Run `gnome-ext-vm help` for the commands; README.md has the details.
+#
+# shellcheck disable=SC2031  # run_hook exports GEV_* in a subshell on purpose
+
+set -euo pipefail
+
+GEV_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+GEV_LIBDIR="$(cd "$(dirname "$GEV_SELF")/../lib" && pwd)"
+# shellcheck source=../lib/common.sh
+source "$GEV_LIBDIR/common.sh"
+# shellcheck source=../lib/config.sh
+source "$GEV_LIBDIR/config.sh"
+# shellcheck source=../lib/snapshot.sh
+source "$GEV_LIBDIR/snapshot.sh"
+# shellcheck source=../lib/vm.sh
+source "$GEV_LIBDIR/vm.sh"
+# shellcheck source=../lib/deploy.sh
+source "$GEV_LIBDIR/deploy.sh"
+# shellcheck source=../lib/capture.sh
+source "$GEV_LIBDIR/capture.sh"
+# shellcheck source=../lib/report.sh
+source "$GEV_LIBDIR/report.sh"
+
+usage() {
+    cat << 'EOF'
+Usage: gnome-ext-vm [--config FILE] <command> [options]
+
+VM management (shared by every project):
+  list                          VMs in the catalog and their state
+  create [--vm NAME]... [--all] [--force]
+                                Create VMs from cloud images (~10 min each)
+  adopt --prefix PREFIX [--ssh-key KEY]
+  adopt --vm NAME --domain DOMAIN [--ssh-key KEY]
+                                Register existing libvirt domains as tool VMs
+  start|stop [--vm NAME] [--all]
+  destroy --vm NAME... | --all --yes
+  viewer [--vm NAME]            Interactive SPICE session
+  ssh [--vm NAME] [--wait] [-- COMMAND...]
+  copy [--vm NAME] SRC... DEST  rsync host files into the VM
+
+Testing (needs a project config):
+  test [--vm NAME] [--label L] [--no-restore] [--screenshot-only]
+       [--logs-only] [--timeout SECS] [--create]
+                                Restore, build, deploy, run hooks, check health
+  matrix [--label L] [--baseline L] [--vm NAME]... [--create]
+         [--no-restore] [--variants] [--variant X]...
+                                Test across VMs and write an HTML report
+  hotreload [--vm NAME] [--cycles N]
+                                Survive rapid disable/enable cycles
+  prepare [--vm NAME]... [--force]
+                                Build the project's guest-package layers now
+  config                        Show the resolved project config
+
+Inside hooks (the VM defaults to the one under test):
+  screenshot [--vm NAME] [--name NAME]
+  send-key [--vm NAME] [--hold MS] CHORD...   e.g. Shift+Print, Ctrl+Alt+T
+  wait-session [--vm NAME] [--timeout SECS]
+  event NAME [KEY=VALUE]...     Append to the run's events.jsonl
+
+Exit codes for test/matrix/hotreload: 0 pass, 1 fail, 2 infrastructure.
+EOF
+}
+
+# --- helpers ---
+
+# The VM a command acts on: --vm, then $GEV_VM (set inside hooks), then the
+# project's default, then the first created VM.
+pick_vm() {
+    local v="${1:-}"
+    [[ -n "$v" ]] || v="${GEV_VM:-}"
+    [[ -n "$v" ]] || ! $HAVE_CONFIG || v=$(config_default_vm)
+    [[ -n "$v" ]] || v=$(registry_names | head -1)
+    [[ -n "$v" ]] || die "No VM given and none created yet"
+    echo "$v"
+}
+
+new_run_dir() {
+    local dir
+    dir="$RESULTS_DIR/runs/$(date +%Y%m%d-%H%M%S)_${VM_NAME}_$1"
+    mkdir -p "$dir/shots"
+    echo "$dir"
+}
+
+vm_unlock() {
+    if [[ -n "${GEV_LOCK_FD:-}" ]]; then
+        exec {GEV_LOCK_FD}>&-
+        unset GEV_LOCK_FD
+    fi
+    unset GEV_LOCK_HELD
+}
+
+# --- VM management ---
+
+cmd_list() {
+    local name os gnome rest domain status snap port
+    printf "%-12s %-6s %-12s %-18s %-8s %-9s %s\n" NAME GNOME OS DOMAIN STATUS SNAPSHOT PORT
+    while IFS='|' read -r name os gnome rest; do
+        vm_resolve "$name" 2>/dev/null || continue
+        domain="${VM_DOMAIN:--}" status="-" snap="-" port="${VM_SSH_PORT:--}"
+        if [[ -n "$VM_DOMAIN" ]]; then
+            if ! vm_exists; then status="missing"
+            elif vm_is_running; then status="running"
+            else status="stopped"; fi
+            snapshot_exists && snap="yes"
+        fi
+        printf "%-12s %-6s %-12s %-18s %-8s %-9s %s\n" "$name" "$gnome" "$os" "$domain" "$status" "$snap" "$port"
+    done < <(catalog_lines)
+}
+
+cmd_create() {
+    local vms=() all=false force=false vm
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vms+=("$2"); shift 2 ;;
+            --all) all=true; shift ;;
+            --force) force=true; shift ;;
+            *) die "create: unknown option $1" ;;
+        esac
+    done
+    if $all; then
+        mapfile -t vms < <(catalog_names)
+    elif [[ ${#vms[@]} -eq 0 ]]; then
+        vms=("$(pick_vm "")")
+    fi
+    for vm in "${vms[@]}"; do
+        log_info "=========================================="
+        log_info "Creating VM: $vm"
+        log_info "=========================================="
+        vm_resolve "$vm" || exit 2
+        vm_create "$force" || die "Creating '$vm' failed"
+    done
+}
+
+cmd_adopt() {
+    local prefix="" vm="" domain="" key="$GEV_KEY" name n=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --prefix) prefix="$2"; shift 2 ;;
+            --vm) vm="$2"; shift 2 ;;
+            --domain) domain="$2"; shift 2 ;;
+            --ssh-key) key="$2"; shift 2 ;;
+            *) die "adopt: unknown option $1" ;;
+        esac
+    done
+    if [[ -n "$vm" ]]; then
+        [[ -n "$domain" ]] || die "adopt --vm needs --domain"
+        vm_resolve "$vm" || exit 2
+        vm_adopt "$domain" "$key" || exit 2
+        return
+    fi
+    [[ -n "$prefix" ]] || die "adopt: give --prefix, or --vm with --domain"
+    for name in $(catalog_names); do
+        "${VIRSH[@]}" dominfo "$prefix$name" &>/dev/null || continue
+        vm_resolve "$name" || continue
+        if [[ -n "$VM_DOMAIN" ]]; then
+            log_info "'$name' is already registered (domain $VM_DOMAIN); skipping"
+            continue
+        fi
+        vm_adopt "$prefix$name" "$key" && n=$((n + 1))
+    done
+    log_ok "Adopted $n VM(s)"
+}
+
+cmd_start_stop() {
+    local action="$1" vm="" all=false v
+    shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --all) all=true; shift ;;
+            -*) die "$action: unknown option $1" ;;
+            *) vm="$1"; shift ;;
+        esac
+    done
+    local vms=()
+    if $all; then mapfile -t vms < <(registry_names); else vms=("$(pick_vm "$vm")"); fi
+    for v in "${vms[@]}"; do
+        vm_require "$v"
+        if [[ "$action" == start ]]; then
+            vm_start
+        elif vm_is_running; then
+            log_info "Shutting down '$VM_NAME'..."
+            vm_shutdown
+        fi
+    done
+}
+
+cmd_destroy() {
+    local vms=() all=false yes=false v
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vms+=("$2"); shift 2 ;;
+            --all) all=true; shift ;;
+            --yes) yes=true; shift ;;
+            *) die "destroy: unknown option $1" ;;
+        esac
+    done
+    if $all; then
+        $yes || die "destroy --all removes every created VM and its disks; add --yes to confirm"
+        mapfile -t vms < <(registry_names)
+    fi
+    [[ ${#vms[@]} -gt 0 ]] || die "Specify --vm NAME or --all --yes"
+    for v in "${vms[@]}"; do
+        vm_resolve "$v" || continue
+        if [[ -z "$VM_DOMAIN" ]]; then
+            log_warn "VM '$v' does not exist, skipping"
+            continue
+        fi
+        vm_destroy
+    done
+}
+
+cmd_viewer() {
+    local vm=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            *) vm="$1"; shift ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    vm_start
+    log_info "Opening viewer for $VM_NAME (GNOME $VM_GNOME_VERSION)"
+    log_info "SSH also available: gnome-ext-vm ssh --vm $VM_NAME"
+    exec virt-viewer -c qemu:///session "$VM_DOMAIN"
+}
+
+cmd_ssh() {
+    local vm="" wait=false cmd=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --wait) wait=true; shift ;;
+            --) shift; cmd=("$@"); break ;;
+            *) vm="$1"; shift ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    vm_is_running || die "VM '$VM_NAME' is not running"
+    if $wait; then vm_wait_session; fi
+    if [[ ${#cmd[@]} -gt 0 ]]; then
+        vm_ssh "${cmd[@]}"
+    else
+        vm_ssh_interactive
+    fi
+}
+
+cmd_copy() {
+    local vm="" args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    [[ ${#args[@]} -ge 2 ]] || die "copy: need SRC... DEST"
+    vm_require "$(pick_vm "$vm")"
+    vm_copy "${args[@]}"
+}
+
+# --- Hook helpers ---
+
+cmd_screenshot() {
+    local vm="" name="screenshot"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --name) name="$2"; shift 2 ;;
+            *) die "screenshot: unknown option $1" ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    take_screenshot "$(screenshot_path "$name")"
+}
+
+cmd_send_key() {
+    local vm="" hold=100 chords=() c
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --hold) hold="$2"; shift 2 ;;
+            *) chords+=("$1"); shift ;;
+        esac
+    done
+    [[ ${#chords[@]} -gt 0 ]] || die "send-key: give at least one key chord"
+    vm_require "$(pick_vm "$vm")"
+    for c in "${chords[@]}"; do
+        send_keys "$hold" "$c" || exit 2
+        sleep 0.2
+    done
+}
+
+cmd_wait_session() {
+    local vm="" timeout=180
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --timeout) timeout="$2"; shift 2 ;;
+            *) die "wait-session: unknown option $1" ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    vm_wait_session "$timeout" || exit 2
+}
+
+cmd_event() {
+    [[ $# -ge 1 ]] || die "event: give an event name"
+    VM_NAME="${GEV_VM:-}"
+    gev_event "$@"
+}
+
+# --- Testing ---
+
+cmd_config() {
+    cat << EOF
+Config:       $CONFIG_FILE
+Project root: $PROJECT_ROOT
+UUID:         $EXT_UUID
+Build:        ${EXT_BUILD:-gnome-extensions pack $EXT_SRC_DIR}
+Zip:          ${EXT_ZIP:-(packed into $RESULTS_DIR/.build)}
+Packages:     fedora: ${GUEST_PACKAGES_FEDORA:-none}; debian: ${GUEST_PACKAGES_DEBIAN:-none}
+Log filter:   $LOG_FILTER
+Matrix:       $(config_matrix | tr '\n' ' ')
+Default VM:   $(config_default_vm)
+Results:      $RESULTS_DIR
+Hooks:        pre-deploy=${HOOK_PRE_DEPLOY:--} post-deploy=${HOOK_POST_DEPLOY:--} test=${HOOK_TEST:--}
+              variants=${HOOK_VARIANTS:--} hotreload-setup=${HOOK_HOTRELOAD_SETUP:--}
+Data dir:     $GEV_DATA
+EOF
+}
+
+cmd_prepare() {
+    local vms=() force=false v
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vms+=("$2"); shift 2 ;;
+            --force) force=true; shift ;;
+            *) die "prepare: unknown option $1" ;;
+        esac
+    done
+    [[ ${#vms[@]} -gt 0 ]] || mapfile -t vms < <(config_matrix)
+    local snap
+    for v in "${vms[@]}"; do
+        vm_require "$v"
+        vm_lock
+        if $force; then
+            rm -f "$GEV_LAYERS/$VM_DOMAIN".*
+        fi
+        snap=$(layer_snapshot) || die "Could not prepare the package layer on '$VM_NAME'"
+        log_ok "$VM_NAME: tests restore '$snap'"
+        vm_shutdown
+        vm_unlock
+    done
+}
+
+cmd_test() {
+    local vm="" no_restore=false shot_only=false logs_only=false timeout=180 create=false
+    LABEL="test"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --no-restore) no_restore=true; shift ;;
+            --screenshot-only) shot_only=true; shift ;;
+            --logs-only) logs_only=true; shift ;;
+            --label) LABEL="$2"; shift 2 ;;
+            --timeout) timeout="$2"; shift 2 ;;
+            --create) create=true; shift ;;
+            *) die "test: unknown option $1" ;;
+        esac
+    done
+    vm_resolve "$(pick_vm "$vm")" || exit 2
+    if [[ -z "$VM_DOMAIN" ]]; then
+        $create || die "VM '$VM_NAME' does not exist. Run: gnome-ext-vm create --vm $VM_NAME (or test --create)"
+        vm_create false || die "Creating '$VM_NAME' failed"
+    fi
+    vm_require "$VM_NAME"
+    vm_lock
+
+    local start; start=$(date +%s)
+    GEV_RUN_DIR="${GEV_RUN_DIR:-$(new_run_dir "$LABEL")}"
+    mkdir -p "$GEV_RUN_DIR/shots"
+    export GEV_RUN_DIR
+    gev_event run_start label="$LABEL" uuid="$EXT_UUID" gnome="$VM_GNOME_VERSION" domain="$VM_DOMAIN"
+
+    log_info "=========================================="
+    log_info "VM Test: $VM_NAME (GNOME $VM_GNOME_VERSION)"
+    log_info "Label: $LABEL"
+    log_info "Run dir: $GEV_RUN_DIR"
+    log_info "=========================================="
+
+    if $shot_only || $logs_only; then
+        vm_is_running || die "VM is not running"
+        if $shot_only; then
+            echo "Screenshot: $(take_screenshot "$GEV_RUN_DIR/screenshot.png")"
+        else
+            echo "Logs: $(capture_logs "$GEV_RUN_DIR/shell.log" "5 minutes ago")"
+        fi
+        gev_event run_end status=DONE
+        exit 0
+    fi
+
+    # Step 1: restore (the project's package layer, if it has one).
+    if $no_restore; then
+        vm_start
+    elif snapshot_exists; then
+        local snap
+        snap=$(layer_snapshot) || die "Could not prepare the package layer"
+        snapshot_restore "$snap" || exit 2
+    else
+        log_warn "No snapshot found, using current VM state"
+        vm_start
+    fi
+
+    # Step 2: SSH.
+    vm_wait_ssh "$timeout" || die "SSH not available - infrastructure problem"
+
+    # Step 3: pre-deploy state. The journal is read by the guest's clock.
+    local since pre_pid
+    since=$(guest_now)
+    pre_pid=$(shell_pid)
+    if [[ -z "$pre_pid" ]]; then
+        log_warn "GNOME Shell not running before deploy; session may not be ready"
+        sleep 15
+        pre_pid=$(shell_pid)
+    fi
+
+    # Step 4: deploy, with hooks either side.
+    local status=PASS notes=()
+    if ! run_hook HOOK_PRE_DEPLOY; then
+        status=FAIL notes+=("Pre-deploy hook: FAIL")
+    fi
+    if ! deploy_extension; then
+        status=FAIL notes+=("Deploy: FAIL")
+    fi
+    # Re-read the PID: deploy may have restarted GDM on first install.
+    pre_pid=$(shell_pid)
+    [[ -n "$pre_pid" ]] || pre_pid=unknown
+    if ! run_hook HOOK_POST_DEPLOY; then
+        status=FAIL notes+=("Post-deploy hook: FAIL")
+    fi
+
+    # Step 5: the project's test steps.
+    if [[ -n "$HOOK_TEST" ]]; then
+        if run_hook HOOK_TEST; then
+            notes+=("Test steps: PASS")
+        else
+            status=FAIL notes+=("Test steps: FAIL")
+        fi
+    fi
+
+    # Step 6: health, screenshot, logs.
+    log_info "Running health checks..."
+    local health shot logs
+    gev_event health_start
+    health=$(check_health "$pre_pid" "$since" 2>&1) || status=FAIL
+    gev_event health_end status="$status"
+    shot=$(take_screenshot "$GEV_RUN_DIR/screenshot.png") || shot="(screenshot failed)"
+    logs=$(capture_logs "$GEV_RUN_DIR/shell.log" "$since") || logs="(log capture failed)"
+
+    local duration=$(( $(date +%s) - start ))
+    gev_event run_end status="$status" duration="$duration"
+    {
+        echo ""
+        echo "=== VM Test Results ==="
+        echo "VM: $VM_NAME (GNOME $VM_GNOME_VERSION)"
+        echo "Status: $status"
+        echo "$health"
+        [[ ${#notes[@]} -gt 0 ]] && printf '%s\n' "${notes[@]}"
+        echo "Screenshot: $shot"
+        echo "Logs: $logs"
+        echo "Events: $GEV_RUN_DIR/events.jsonl"
+        echo "Duration: ${duration}s"
+    } | tee "$GEV_RUN_DIR/result.txt"
+
+    [[ "$status" == PASS ]] || exit 1
+    exit 0
+}
+
+cmd_matrix() {
+    local baseline="" create=false no_restore=false sel=() variants=false variant_args=()
+    LABEL=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --label) LABEL="$2"; shift 2 ;;
+            --baseline) baseline="$2"; shift 2 ;;
+            --create) create=true; shift ;;
+            --no-restore) no_restore=true; shift ;;
+            --vm) sel+=("$2"); shift 2 ;;
+            --variants) variants=true; shift ;;
+            --variant) variants=true; variant_args+=("$2"); shift 2 ;;
+            *) die "matrix: unknown option $1" ;;
+        esac
+    done
+    if [[ -z "$LABEL" ]]; then
+        LABEL=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo test)
+        LABEL="${LABEL//\//-}"
+    fi
+    BASELINE="$baseline"
+    local vms=()
+    if [[ ${#sel[@]} -gt 0 ]]; then vms=("${sel[@]}"); else mapfile -t vms < <(config_matrix); fi
+    [[ ${#vms[@]} -gt 0 ]] || die "No VMs to test (set MATRIX in the config, or create some)"
+    if $variants && [[ -z "$HOOK_VARIANTS" ]]; then
+        die "--variants needs HOOK_VARIANTS in the project config"
+    fi
+
+    local label_dir="$RESULTS_DIR/$LABEL"
+    mkdir -p "$label_dir"
+    declare -gA RESULTS=() GNOME_VERSIONS=() DURATIONS=() DOMAINS=()
+    local names=() vm t0 rc run_dir img pass=0 fail=0 skip=0
+
+    log_info "============================================"
+    log_info "Test Matrix Run: $LABEL"
+    log_info "VMs: ${vms[*]}"
+    $variants && log_info "Variants: ${variant_args[*]:-(hook default)}"
+    [[ -n "$BASELINE" ]] && log_info "Comparing against: $BASELINE"
+    log_info "============================================"
+
+    for vm in "${vms[@]}"; do
+        if ! vm_resolve "$vm"; then
+            names+=("$vm"); RESULTS[$vm]=SKIP; skip=$((skip + 1))
+            continue
+        fi
+        vm="$VM_NAME"
+        names+=("$vm")
+        GNOME_VERSIONS[$vm]="$VM_GNOME_VERSION"
+        DOMAINS[$vm]="$VM_DOMAIN"
+        log_info "------------------------------------------"
+        log_info "Testing: $vm (GNOME $VM_GNOME_VERSION)"
+        log_info "------------------------------------------"
+
+        if [[ -z "$VM_DOMAIN" ]]; then
+            if $create; then
+                "$GEV_SELF" create --vm "$vm" || { RESULTS[$vm]=FAIL; fail=$((fail + 1)); continue; }
+                vm_resolve "$vm"
+                DOMAINS[$vm]="$VM_DOMAIN"
+            else
+                log_warn "VM '$vm' does not exist, skipping (use --create)"
+                RESULTS[$vm]=SKIP; skip=$((skip + 1))
+                continue
+            fi
+        fi
+
+        vm_lock
+        run_dir=$(new_run_dir "$LABEL")
+        t0=$(date +%s)
+        rc=0
+        local test_args=(--vm "$vm" --label "$LABEL")
+        $no_restore && test_args+=(--no-restore)
+        GEV_RUN_DIR="$run_dir" "$GEV_SELF" --config "$CONFIG_FILE" test "${test_args[@]}" 2>&1 \
+            | tee "$label_dir/$vm.output" || rc=$?
+        if [[ $rc -eq 0 ]]; then
+            RESULTS[$vm]=PASS; pass=$((pass + 1))
+        else
+            RESULTS[$vm]=FAIL; fail=$((fail + 1))
+        fi
+        DURATIONS[$vm]=$(( $(date +%s) - t0 ))
+
+        if $variants && [[ "${RESULTS[$vm]}" == PASS ]]; then
+            GEV_RUN_DIR="$run_dir" run_hook HOOK_VARIANTS "${variant_args[@]}" 2>&1 | sed 's/^/    /' || true
+        fi
+
+        rm -f "$label_dir/${vm}_"*.png
+        [[ -f "$run_dir/screenshot.png" ]] && cp "$run_dir/screenshot.png" "$label_dir/$vm.png"
+        [[ -f "$run_dir/shell.log" ]] && cp "$run_dir/shell.log" "$label_dir/$vm.log"
+        [[ -f "$run_dir/events.jsonl" ]] && cp "$run_dir/events.jsonl" "$label_dir/$vm.events.jsonl"
+        for img in "$run_dir"/shots/*.png; do
+            [[ -f "$img" ]] && cp "$img" "$label_dir/${vm}_$(basename "$img")"
+        done
+
+        log_info "Shutting down $vm..."
+        vm_shutdown
+        vm_unlock
+    done
+
+    write_report "$label_dir" "${names[@]}"
+
+    echo ""
+    echo "============================================"
+    echo "Test Matrix Results: $LABEL"
+    echo "============================================"
+    for vm in "${names[@]}"; do
+        printf "  %-20s GNOME %-3s %s (%ss)\n" "$vm" "${GNOME_VERSIONS[$vm]:-?}" "${RESULTS[$vm]:-SKIP}" "${DURATIONS[$vm]:-0}"
+    done
+    echo ""
+    echo "Pass: $pass  Fail: $fail  Skip: $skip"
+    echo "Report: $label_dir/report.html"
+    echo ""
+    [[ $fail -eq 0 ]]
+}
+
+cmd_hotreload() {
+    local vm="" cycles=10
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --cycles) cycles="$2"; shift 2 ;;
+            *) die "hotreload: unknown option $1" ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    vm_lock
+    LABEL=hotreload
+    GEV_RUN_DIR="${GEV_RUN_DIR:-$(new_run_dir hotreload)}"
+    export GEV_RUN_DIR
+    gev_event run_start label=hotreload cycles="$cycles"
+
+    log_info "=== Step 1: Clean deploy ==="
+    snapshot_exists || die "No snapshot for VM '$VM_NAME'; run: gnome-ext-vm create --vm $VM_NAME"
+    local snap
+    snap=$(layer_snapshot) || die "Could not prepare the package layer"
+    snapshot_restore "$snap" || exit 2
+    vm_wait_ssh 120 || die "SSH not available"
+    deploy_extension || { log_error "Deploy failed"; exit 1; }
+
+    # A reboot makes GNOME Shell load the new JS modules from a cold start.
+    log_info "Rebooting VM to load fresh JS modules..."
+    gev_event reboot
+    vm_ssh "sudo reboot" || true
+    sleep 5
+    vm_wait_session 120 || die "GNOME session not ready after reboot"
+    sleep 10
+
+    local pre_pid state cycle_time cur_pid i
+    pre_pid=$(shell_pid)
+    [[ -n "$pre_pid" ]] || die "GNOME Shell not running after deploy+reboot"
+    state=$(vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" || true)
+    grep -q ACTIVE <<< "$state" || { log_error "Extension not active after deploy: $state"; exit 1; }
+    log_ok "Extension running (gnome-shell PID=$pre_pid)"
+
+    if [[ -n "$HOOK_HOTRELOAD_SETUP" ]]; then
+        run_hook HOOK_HOTRELOAD_SETUP 2>&1 | tail -3 || true
+        sleep 5
+    fi
+    cycle_time=$(guest_now)
+
+    log_info "=== Step 2: Disable/enable x${cycles} ==="
+    for i in $(seq 1 "$cycles"); do
+        cur_pid=$(shell_pid)
+        if [[ -z "$cur_pid" ]]; then
+            log_error "GNOME Shell died before cycle #$i (was PID $pre_pid)"
+            break
+        fi
+        if [[ "$cur_pid" != "$pre_pid" ]]; then
+            log_error "GNOME Shell PID changed before cycle #$i: $pre_pid -> $cur_pid"
+            pre_pid="$cur_pid"
+        fi
+        log_info "Cycle #$i/$cycles: disable -> enable..."
+        gev_event cycle n="$i"
+        vm_ssh "gnome-extensions disable $EXT_UUID 2>/dev/null" || true
+        # Just long enough for timers to fire inside the teardown window.
+        sleep 1
+        vm_ssh "gnome-extensions enable $EXT_UUID 2>/dev/null" || true
+        sleep 3
+    done
+    log_info "Waiting for final cycle to settle..."
+    sleep 5
+
+    log_info "=== Step 3: Health check ==="
+    local status=PASS post_pid disposed errors
+    post_pid=$(shell_pid)
+    if [[ -z "$post_pid" ]]; then
+        log_error "GNOME Shell is NOT RUNNING after cycling (crashed)"; status=FAIL
+    elif [[ "$pre_pid" != "$post_pid" ]]; then
+        log_error "GNOME Shell PID changed: $pre_pid -> $post_pid (crash + auto-restart)"; status=FAIL
+    else
+        log_ok "GNOME Shell survived (PID=$post_pid unchanged)"
+    fi
+    state=$(vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" || true)
+    if grep -q ACTIVE <<< "$state"; then
+        log_ok "Extension: ACTIVE"
+    else
+        log_error "Extension state after cycling: $state"; status=FAIL
+    fi
+    disposed=$(vm_ssh "journalctl --user -b --since='$cycle_time' --no-pager 2>/dev/null | grep -c 'already disposed' || true" 2>/dev/null)
+    if [[ "${disposed:-0}" -gt 0 ]]; then
+        log_error "Found $disposed 'already disposed' errors"; status=FAIL
+    else
+        log_ok "No 'already disposed' errors"
+    fi
+    errors=$(js_errors "$cycle_time")
+    if [[ -n "$errors" ]]; then
+        log_error "JS errors found:"; echo "$errors" >&2; status=FAIL
+    else
+        log_ok "No JS errors"
+    fi
+    log_info "Extension log output during cycling:"
+    vm_ssh "journalctl --user -b --since='$cycle_time' --no-pager 2>/dev/null | grep -iE '$LOG_FILTER|already disposed|JS ERROR' || echo '  (none)'" 2>/dev/null || true
+    capture_logs "$GEV_RUN_DIR/shell.log" "$cycle_time" >/dev/null || true
+    gev_event run_end status="$status"
+
+    {
+        echo ""
+        echo "=== Disable/Enable Cycle Test Result ==="
+        echo "VM:     $VM_NAME"
+        echo "Cycles: $cycles"
+        echo "Status: $status"
+        echo "PID:    $pre_pid -> ${post_pid:-(dead)}"
+        echo "Extension: $state"
+        echo "Disposed errors: ${disposed:-0}"
+        echo "Events: $GEV_RUN_DIR/events.jsonl"
+    } | tee "$GEV_RUN_DIR/result.txt"
+    [[ "$status" == PASS ]] || exit 1
+}
+
+# --- dispatch ---
+
+CONFIG_ARG=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config) CONFIG_ARG="$2"; shift 2 ;;
+        -h|--help|help) usage; exit 0 ;;
+        *) break ;;
+    esac
+done
+[[ $# -gt 0 ]] || { usage; exit 2; }
+command_name="$1"
+shift
+if [[ "${1:-}" == -h || "${1:-}" == --help ]]; then
+    usage
+    exit 0
+fi
+
+case "$command_name" in
+    test|matrix|hotreload|prepare|config) config_load "$CONFIG_ARG" required ;;
+    *) config_load "$CONFIG_ARG" ;;
+esac
+
+case "$command_name" in
+    list) cmd_list "$@" ;;
+    create) cmd_create "$@" ;;
+    adopt) cmd_adopt "$@" ;;
+    start|stop) cmd_start_stop "$command_name" "$@" ;;
+    destroy) cmd_destroy "$@" ;;
+    viewer) cmd_viewer "$@" ;;
+    ssh) cmd_ssh "$@" ;;
+    copy) cmd_copy "$@" ;;
+    screenshot) cmd_screenshot "$@" ;;
+    send-key) cmd_send_key "$@" ;;
+    wait-session) cmd_wait_session "$@" ;;
+    event) cmd_event "$@" ;;
+    config) cmd_config "$@" ;;
+    prepare) cmd_prepare "$@" ;;
+    test) cmd_test "$@" ;;
+    matrix) cmd_matrix "$@" ;;
+    hotreload) cmd_hotreload "$@" ;;
+    *) log_error "Unknown command: $command_name"; usage >&2; exit 2 ;;
+esac
