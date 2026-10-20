@@ -160,6 +160,8 @@ time; `test` builds a missing one on its own.
 |---|---|
 | `screenshot [--name NAME]` | `virsh screenshot` → PNG. In a run it lands at `$GEV_RUN_DIR/shots/NAME.png`; otherwise in `RESULTS_DIR` (or `~/.local/share/gnome-ext-vm/results` with no project config). Prints the path |
 | `send-key [--hold MS] CHORD...` | Press key chords via `virsh send-key`, e.g. `Shift+Print`, `Ctrl+Alt+T`, `Super`, `Escape`, `a`. `KEY_*` names pass through |
+| `pointer move X Y` | Move the pointer to screen pixel X,Y (as in a screenshot) via the VM's USB tablet, to hover. Screenshots don't show the cursor, but hover effects do appear |
+| `pointer click [X Y] [--button B]` | Click `left` (default), `right` or `middle`, after moving to X,Y if given |
 | `wait-session [--timeout S]` | Wait for SSH and gnome-shell |
 | `event NAME [KEY=VALUE]...` | Append a custom event to the run's `events.jsonl` |
 | `ssh -- CMD`, `copy SRC DEST` | As above |
@@ -221,7 +223,7 @@ RESULTS_DIR/
 `events.jsonl` lines look like
 `{"ts":"2026-10-20T22:01:02.123Z","t":1792533662.123,"event":"screenshot","vm":"fedora44","path":".../shots/after-print.png"}`.
 Events: `run_start`, `restore_start`/`restore_end`, `layer_build_start`/`layer_build_end`,
-`deploy_start`/`deploy_end`, `gdm_restart`, `hook_start`/`hook_end`, `send_key`,
+`deploy_start`/`deploy_end`, `gdm_restart`, `hook_start`/`hook_end`, `send_key`, `pointer`,
 `screenshot`, `health_start`/`health_end`, `logs`, `cycle`, `reboot`, `run_end`,
 and whatever hooks add with `event`. The log is the sync track for turning a
 run into a video later: it records when each step happened, against the

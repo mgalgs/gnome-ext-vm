@@ -161,3 +161,51 @@ send_keys() {
     "${VIRSH[@]}" send-key "$VM_DOMAIN" --codeset linux --holdtime "$hold" "${keys[@]}" >/dev/null
     log_ok "Sent $chord to '$VM_NAME'"
 }
+
+# Guest screen size as "W H", read from a screendump (PNG or PPM, by QEMU
+# version).
+screen_size() {
+    local tmp size
+    tmp=$(mktemp)
+    "${VIRSH[@]}" screenshot "$VM_DOMAIN" --file "$tmp" &>/dev/null
+    size=$(magick identify -format '%w %h' "$tmp" 2>/dev/null) || true
+    rm -f "$tmp"
+    [[ "$size" =~ ^[0-9]+\ [0-9]+$ ]] \
+        || { log_error "Cannot read screen size of '$VM_NAME'"; return 1; }
+    echo "$size"
+}
+
+# Send QMP input events. The VM's absolute pointer is its USB tablet, so
+# coordinates are 0..32767 across the screen, not pixels.
+qmp_input() {
+    local out
+    out=$("${VIRSH[@]}" qemu-monitor-command "$VM_DOMAIN" \
+        "{\"execute\":\"input-send-event\",\"arguments\":{\"events\":[$1]}}" 2>&1)
+    [[ "$out" == *'"return"'* ]] || { log_error "QMP input failed: $out"; return 1; }
+}
+
+# Move the pointer to screen pixel X Y.
+pointer_move() {
+    local x="$1" y="$2" w h
+    [[ "$x" =~ ^[0-9]+$ && "$y" =~ ^[0-9]+$ ]] \
+        || { log_error "pointer: X and Y must be pixel integers"; return 1; }
+    read -r w h < <(screen_size) || return 1
+    (( x < w && y < h )) \
+        || { log_error "pointer: $x,$y is off the ${w}x$h screen"; return 1; }
+    gev_event pointer action=move x="$x" y="$y"
+    qmp_input "{\"type\":\"abs\",\"data\":{\"axis\":\"x\",\"value\":$(( x * 32767 / (w - 1) ))}},{\"type\":\"abs\",\"data\":{\"axis\":\"y\",\"value\":$(( y * 32767 / (h - 1) ))}}"
+}
+
+# Press and release a button where the pointer is: left, right or middle.
+pointer_click() {
+    local button="$1" ev
+    case "$button" in
+        left|right|middle) ;;
+        *) log_error "pointer: unknown button '$button'"; return 1 ;;
+    esac
+    ev="{\"type\":\"btn\",\"data\":{\"button\":\"$button\",\"down\""
+    gev_event pointer action=click button="$button"
+    qmp_input "$ev:true}}" || return 1
+    sleep 0.05
+    qmp_input "$ev:false}}"
+}

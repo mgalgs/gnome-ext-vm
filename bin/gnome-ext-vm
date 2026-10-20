@@ -58,6 +58,8 @@ Testing (needs a project config):
 Inside hooks (the VM defaults to the one under test):
   screenshot [--vm NAME] [--name NAME]
   send-key [--vm NAME] [--hold MS] CHORD...   e.g. Shift+Print, Ctrl+Alt+T
+  pointer move [--vm NAME] X Y  Move the pointer to screen pixel X,Y
+  pointer click [--vm NAME] [X Y] [--button left|right|middle]
   wait-session [--vm NAME] [--timeout SECS]
   event NAME [KEY=VALUE]...     Append to the run's events.jsonl
 
@@ -298,6 +300,35 @@ cmd_send_key() {
         send_keys "$hold" "$c" || exit 2
         sleep 0.2
     done
+}
+
+cmd_pointer() {
+    local vm="" button=left action="${1:-}" xy=()
+    [[ $# -gt 0 ]] && shift
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vm) vm="$2"; shift 2 ;;
+            --button) button="$2"; shift 2 ;;
+            *) xy+=("$1"); shift ;;
+        esac
+    done
+    vm_require "$(pick_vm "$vm")"
+    case "$action" in
+        move)
+            [[ ${#xy[@]} -eq 2 ]] || die "pointer move: need X Y"
+            pointer_move "${xy[@]}" || exit 2
+            ;;
+        click)
+            [[ ${#xy[@]} -eq 0 || ${#xy[@]} -eq 2 ]] \
+                || die "pointer click: give X Y or nothing"
+            if [[ ${#xy[@]} -eq 2 ]]; then
+                pointer_move "${xy[@]}" || exit 2
+                sleep 0.1
+            fi
+            pointer_click "$button" || exit 2
+            ;;
+        *) die "pointer: use 'move X Y' or 'click [X Y] [--button B]'" ;;
+    esac
 }
 
 cmd_wait_session() {
@@ -746,6 +777,7 @@ case "$command_name" in
     copy) cmd_copy "$@" ;;
     screenshot) cmd_screenshot "$@" ;;
     send-key) cmd_send_key "$@" ;;
+    pointer) cmd_pointer "$@" ;;
     wait-session) cmd_wait_session "$@" ;;
     event) cmd_event "$@" ;;
     config) cmd_config "$@" ;;
