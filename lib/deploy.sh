@@ -68,6 +68,9 @@ deploy_extension() {
     # Disable then enable: the Wayland-safe way to pick up new code.
     vm_ssh "gnome-extensions disable $EXT_UUID 2>/dev/null; sleep 2; gnome-extensions enable $EXT_UUID 2>/dev/null" || true
     sleep 5
+    # Right after a GDM restart the Shell's Extensions service can be
+    # mid-restart and answer with no state, so give it a while.
+    wait_ext_active 30 || log_warn "Extension not running yet; the health check will say why"
     gev_event deploy_end
     log_ok "Extension deployed and enabled"
 }

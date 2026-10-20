@@ -120,7 +120,7 @@ name (`fedora42`) or its libvirt domain (`gev-fedora42`).
 3. `HOOK_PRE_DEPLOY`
 4. Build the zip; `gnome-extensions install --force` it; install its schemas system-wide; if the Shell has never seen the UUID, restart GDM so a new session discovers it; enable, then disable and re-enable
 5. `HOOK_POST_DEPLOY`, then `HOOK_TEST`
-6. Health: gnome-shell running, same PID (no crash-restart), extension `ACTIVE`, no matching `JS ERROR` since step 2
+6. Health: gnome-shell running, same PID (no crash-restart), extension `ACTIVE` (GNOME 45 says `ENABLED`), no matching `JS ERROR` since step 2
 7. Screenshot and journal
 
 Exit codes: 0 pass, 1 fail (extension or hook), 2 infrastructure. A failing

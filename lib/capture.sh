@@ -28,8 +28,8 @@ check_health() {
         fi
     fi
 
-    state=$(vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" 2>/dev/null || echo "State: UNKNOWN")
-    if grep -q 'State: ACTIVE' <<< "$state"; then
+    state=$(ext_state)
+    if state_is_active "$state"; then
         echo "Extension: ACTIVE"
     else
         echo "Extension: ${state:-State: UNKNOWN}"
@@ -46,6 +46,26 @@ check_health() {
         status=1
     fi
     return $status
+}
+
+# The extension's "State: ..." line, or nothing if the Shell can't say.
+ext_state() {
+    vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" 2>/dev/null | sed 's/^[[:space:]]*//' || true
+}
+
+# GNOME 45 calls a running extension ENABLED; 46 and later call it ACTIVE
+# (and have an INACTIVE, so match the whole word).
+state_is_active() { grep -qE '^State: (ACTIVE|ENABLED)$' <<< "$1"; }
+
+# Poll until the extension is running. Usage: wait_ext_active <timeout_secs>
+wait_ext_active() {
+    local timeout="$1" elapsed=0
+    while (( elapsed < timeout )); do
+        state_is_active "$(ext_state)" && return 0
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
 }
 
 # JS errors that mention the project's LOG_FILTER, since a guest time.

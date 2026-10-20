@@ -633,8 +633,8 @@ cmd_hotreload() {
     local pre_pid state cycle_time cur_pid i
     pre_pid=$(shell_pid)
     [[ -n "$pre_pid" ]] || die "GNOME Shell not running after deploy+reboot"
-    state=$(vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" || true)
-    grep -q ACTIVE <<< "$state" || { log_error "Extension not active after deploy: $state"; exit 1; }
+    state=$(ext_state)
+    state_is_active "$state" || { log_error "Extension not active after deploy: $state"; exit 1; }
     log_ok "Extension running (gnome-shell PID=$pre_pid)"
 
     if [[ -n "$HOOK_HOTRELOAD_SETUP" ]]; then
@@ -675,8 +675,8 @@ cmd_hotreload() {
     else
         log_ok "GNOME Shell survived (PID=$post_pid unchanged)"
     fi
-    state=$(vm_ssh "gnome-extensions show $EXT_UUID 2>/dev/null | grep State:" || true)
-    if grep -q ACTIVE <<< "$state"; then
+    state=$(ext_state)
+    if state_is_active "$state"; then
         log_ok "Extension: ACTIVE"
     else
         log_error "Extension state after cycling: $state"; status=FAIL
