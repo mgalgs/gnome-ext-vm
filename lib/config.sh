@@ -48,7 +48,7 @@ config_load() {
     HAVE_CONFIG=false
     if ! path=$(config_find "$1"); then
         [[ "${2:-}" == required ]] && die "No project config found (looked for ${CONFIG_NAMES[*]} here and in parent directories; or pass --config)"
-        RESULTS_DIR="${RESULTS_DIR:-$PWD/gnome-ext-vm-results}"
+        RESULTS_DIR="${RESULTS_DIR:-$GEV_DATA/results}"
         return 0
     fi
     CONFIG_FILE="$path"

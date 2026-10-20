@@ -158,7 +158,7 @@ time; `test` builds a missing one on its own.
 
 | Command | What it does |
 |---|---|
-| `screenshot [--name NAME]` | `virsh screenshot` → PNG. In a run it lands at `$GEV_RUN_DIR/shots/NAME.png`; otherwise in `RESULTS_DIR`. Prints the path |
+| `screenshot [--name NAME]` | `virsh screenshot` → PNG. In a run it lands at `$GEV_RUN_DIR/shots/NAME.png`; otherwise in `RESULTS_DIR` (or `~/.local/share/gnome-ext-vm/results` with no project config). Prints the path |
 | `send-key [--hold MS] CHORD...` | Press key chords via `virsh send-key`, e.g. `Shift+Print`, `Ctrl+Alt+T`, `Super`, `Escape`, `a`. `KEY_*` names pass through |
 | `wait-session [--timeout S]` | Wait for SSH and gnome-shell |
 | `event NAME [KEY=VALUE]...` | Append a custom event to the run's `events.jsonl` |
