@@ -138,7 +138,9 @@ vm_provision() {
     sleep 10
     vm_wait_ssh 300 || return 1
     vm_wait_shell 120 || return 1
-    sleep 10
+    # Past the Shell's first minute, so the snapshot taken next does not
+    # hold /run/user/*/gnome-shell-disable-extensions (see deploy.sh).
+    sleep 65
 
     vm_ssh "gsettings set org.gnome.desktop.session idle-delay 0; gsettings set org.gnome.desktop.screensaver lock-enabled false; gsettings set org.gnome.desktop.notifications show-banners false; gsettings set org.gnome.desktop.screensaver idle-activation-enabled false" 2>/dev/null || true
     log_ok "Provisioned: $(vm_ssh 'gnome-shell --version' 2>/dev/null || echo 'GNOME Shell version unknown')"

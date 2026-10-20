@@ -57,7 +57,10 @@ deploy_extension() {
     if grep -q "doesn't exist" <<< "$known"; then
         log_info "Extension not yet known to GNOME Shell; restarting GDM so it is discovered..."
         gev_event gdm_restart
-        vm_ssh "sudo systemctl restart gdm 2>/dev/null || sudo systemctl restart gdm3" || true
+        # The Shell creates this at startup and removes it a minute later; a
+        # Shell that starts while it exists runs with extensions disabled.
+        # Snapshots taken inside that minute restore it, so clear it first.
+        vm_ssh "rm -f /run/user/\$(id -u)/gnome-shell-disable-extensions; sudo systemctl restart gdm 2>/dev/null || sudo systemctl restart gdm3" || true
         sleep 5
         vm_wait_shell 60 || true
         sleep 5
