@@ -102,11 +102,11 @@ name (`fedora42`) or its libvirt domain (`gev-fedora42`).
 | Command | What it does |
 |---|---|
 | `list` | Catalog VMs with domain, state, snapshot and SSH port |
-| `create [--vm N]... [--all] [--force]` | Download the image (cached), make a CoW disk, cloud-init, install GNOME with auto-login, take the `clean-gnome-session` live snapshot, shut down |
+| `create [--vm N]... [--all] [--force]` | Download the image (cached), make a CoW disk, cloud-init, install GNOME with auto-login, take the `clean-gnome-session` live snapshot, shut down. `--all` is the project's `MATRIX` when there is a config, else the whole catalog |
 | `adopt --prefix P [--ssh-key K]` | Register existing domains named `P<name>` without changing them |
 | `adopt --vm N --domain D [--ssh-key K]` | Register one domain |
 | `start` / `stop [--vm N] [--all]` | Boot / graceful shutdown |
-| `destroy --vm N...` / `destroy --all --yes` | Remove VMs, their disks and snapshots; cached images stay |
+| `destroy --vm N...` / `destroy --all --yes` | Remove VMs, their disks and snapshots; cached images stay. VMs are shared, so this affects every project. `--all` is scoped like `create --all` |
 | `viewer [--vm N]` | SPICE viewer on the live desktop |
 | `ssh [--vm N] [--wait] [-- CMD...]` | Shell, or run a command with the user's session bus |
 | `copy [--vm N] SRC... DEST` | rsync files into the VM |

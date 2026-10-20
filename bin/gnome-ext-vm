@@ -121,7 +121,9 @@ cmd_create() {
             *) die "create: unknown option $1" ;;
         esac
     done
-    if $all; then
+    if $all && $HAVE_CONFIG; then
+        mapfile -t vms < <(config_matrix)
+    elif $all; then
         mapfile -t vms < <(catalog_names)
     elif [[ ${#vms[@]} -eq 0 ]]; then
         vms=("$(pick_vm "")")
@@ -200,8 +202,12 @@ cmd_destroy() {
         esac
     done
     if $all; then
-        $yes || die "destroy --all removes every created VM and its disks; add --yes to confirm"
-        mapfile -t vms < <(registry_names)
+        $yes || die "destroy --all removes VMs and their disks for every project; add --yes to confirm"
+        if $HAVE_CONFIG; then
+            mapfile -t vms < <(config_matrix)
+        else
+            mapfile -t vms < <(registry_names)
+        fi
     fi
     [[ ${#vms[@]} -gt 0 ]] || die "Specify --vm NAME or --all --yes"
     for v in "${vms[@]}"; do
