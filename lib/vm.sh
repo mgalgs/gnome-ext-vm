@@ -148,7 +148,7 @@ vm_provision() {
 domain_ssh_port() {
     "${VIRSH[@]}" dumpxml "$1" 2>/dev/null | tr -d '\n' \
         | grep -o '<portForward[^>]*proto=.tcp.[^>]*>[[:space:]]*<range[^>]*to=.22.[^>]*/>' \
-        | grep -o "start=.[0-9]*" | grep -o '[0-9]*' | head -1
+        | grep -o "start=.[0-9]*" | grep -o '[0-9]*' | sed -n 1p
 }
 
 # Register an existing libvirt domain as VM_NAME. Nothing about the domain
@@ -168,7 +168,7 @@ vm_adopt() {
     # Hard-link its base image into the shared cache, so a later create of
     # the same image skips the download. The domain keeps using the original
     # path, which stays put.
-    disk=$("${VIRSH[@]}" domblklist "$domain" --details 2>/dev/null | awk '$2 == "disk" {print $4; exit}')
+    disk=$("${VIRSH[@]}" domblklist "$domain" --details 2>/dev/null | awk '$2 == "disk" && !d {print $4; d = 1}')
     backing=$(qemu-img info -U "$disk" 2>/dev/null | sed -n 's/^backing file: \(.*\)$/\1/p' | sed 's/ (actual path.*//')
     if [[ -n "$backing" && -f "$backing" && ! -e "$GEV_IMAGES/$(basename "$backing")" ]]; then
         ensure_dirs

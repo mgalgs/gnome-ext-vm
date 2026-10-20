@@ -73,7 +73,7 @@ pick_vm() {
     local v="${1:-}"
     [[ -n "$v" ]] || v="${GEV_VM:-}"
     [[ -n "$v" ]] || ! $HAVE_CONFIG || v=$(config_default_vm)
-    [[ -n "$v" ]] || v=$(registry_names | head -1)
+    [[ -n "$v" ]] || v=$(registry_names | sed -n 1p)
     [[ -n "$v" ]] || die "No VM given and none created yet"
     echo "$v"
 }

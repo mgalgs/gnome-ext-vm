@@ -2,8 +2,12 @@
 # Live snapshots (memory included, so a restore lands on a running desktop),
 # and the per-project package layers built on top of the base snapshot.
 
+# Capture, then grep: piping into grep -q lets grep exit early, virsh then
+# dies of SIGPIPE, and pipefail reports a match as a miss (~1 call in 13).
 snapshot_exists() {
-    "${VIRSH[@]}" snapshot-list "$VM_DOMAIN" --name 2>/dev/null | grep -qx "${1:-$SNAPSHOT_NAME}"
+    local names
+    names=$("${VIRSH[@]}" snapshot-list "$VM_DOMAIN" --name 2>/dev/null) || return 1
+    grep -qx "${1:-$SNAPSHOT_NAME}" <<< "$names"
 }
 
 # Usage: snapshot_create <name> <description>

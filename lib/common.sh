@@ -105,7 +105,7 @@ registry_names() { registry_lines | cut -d'|' -f1; }
 # VM_SSH_PORT and VM_SSH_KEY; VM_DOMAIN is empty when the VM is not created.
 vm_resolve() {
     local want="$1" line name
-    line=$(registry_lines | awk -F'|' -v w="$want" '$1 == w || $2 == w' | head -1)
+    line=$(registry_lines | awk -F'|' -v w="$want" '$1 == w || $2 == w' | sed -n 1p)
     name="${line%%|*}"
     [[ -n "$line" ]] || name="$want"
     if ! catalog_load "$name"; then
@@ -148,7 +148,7 @@ alloc_port() {
     used=$(registry_lines | cut -d'|' -f3)
     for port in $(seq 2230 2399); do
         grep -qx "$port" <<< "$used" && continue
-        ss -Htln "sport = :$port" 2>/dev/null | grep -q . && continue
+        [[ -n "$(ss -Htln "sport = :$port" 2>/dev/null)" ]] && continue
         echo "$port"
         return 0
     done

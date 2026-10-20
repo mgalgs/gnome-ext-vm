@@ -102,7 +102,7 @@ config_default_vm() {
     if [[ -n "${DEFAULT_VM:-}" ]]; then
         echo "$DEFAULT_VM"
     else
-        config_matrix | head -1
+        config_matrix | sed -n 1p
     fi
 }
 
