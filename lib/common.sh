@@ -114,8 +114,8 @@ registry_remove() {
 
 registry_names() { registry_lines | cut -d'|' -f1; }
 
-# Resolve a VM by its name, or by its libvirt domain name (so old names such
-# as gev-fedora42 keep working). Sets the catalog fields plus VM_DOMAIN,
+# Resolve a VM by its name, or by its libvirt domain name (so an adopted
+# VM's original domain name keeps working). Sets the catalog fields plus VM_DOMAIN,
 # VM_SSH_PORT and VM_SSH_KEY; VM_DOMAIN is empty when the VM is not created.
 vm_resolve() {
     local want="$1" line name
