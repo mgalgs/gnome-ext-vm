@@ -27,7 +27,8 @@ VIRSH=(virsh -c qemu:///session)
 
 SSH_USER="testuser"
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
-          -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR)
+          -o ConnectTimeout=10 -o BatchMode=yes -o LogLevel=ERROR
+          -o IdentitiesOnly=yes)
 
 # --- Logging (stderr, so stdout stays clean for paths and results) ---
 if [[ -t 2 ]]; then
