@@ -55,7 +55,7 @@ vm_create() {
         --memory "$VM_RAM_MB" \
         --disk "path=$disk,format=qcow2" \
         --disk "path=$seed,device=cdrom" \
-        --network "user,model=virtio,backend.type=passt,portForward0.proto=tcp,portForward0.range0.start=${VM_SSH_PORT},portForward0.range0.to=22" \
+        --network "user,model=virtio,backend.type=passt,portForward0.proto=tcp,portForward0.address=127.0.0.1,portForward0.range0.start=${VM_SSH_PORT},portForward0.range0.to=22" \
         --graphics spice,gl.enable=no,listens0.type=socket \
         --video virtio \
         --noautoconsole \
