@@ -157,10 +157,14 @@ vm_shutdown() {
 }
 
 # Pick a host port for a new VM's SSH forward: not in the registry, not
+# claimed by any session domain (a shut-off one listens on nothing), not
 # listening now. Starts above the 222x range other tools like to squat on.
 alloc_port() {
-    local port used
-    used=$(registry_lines | cut -d'|' -f3)
+    local port used d
+    used=$(registry_lines | cut -d'|' -f3
+           "${VIRSH[@]}" list --all --name 2>/dev/null | while read -r d; do
+               [[ -n "$d" ]] && domain_ssh_port "$d"
+           done)
     for port in $(seq 2230 2399); do
         grep -qx "$port" <<< "$used" && continue
         [[ -n "$(ss -Htln "sport = :$port" 2>/dev/null)" ]] && continue
