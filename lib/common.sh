@@ -5,6 +5,9 @@
 #
 # Uses qemu:///session (user-mode libvirt) with passt networking: no root.
 
+# Bump with each release tag (vX.Y.Z).
+GEV_VERSION="0.1.0"
+
 GEV_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GEV_ROOT="$(cd "$GEV_LIB/.." && pwd)"
 

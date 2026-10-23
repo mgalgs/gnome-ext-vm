@@ -28,6 +28,7 @@ source "$GEV_LIBDIR/report.sh"
 usage() {
     cat << 'EOF'
 Usage: gnome-ext-vm [--config FILE] <command> [options]
+       gnome-ext-vm --version
 
 VM management (shared by every project):
   list                          VMs in the catalog and their state
@@ -750,6 +751,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --config) CONFIG_ARG="$2"; shift 2 ;;
         -h|--help|help) usage; exit 0 ;;
+        --version|version) echo "gnome-ext-vm $GEV_VERSION"; exit 0 ;;
         *) break ;;
     esac
 done
