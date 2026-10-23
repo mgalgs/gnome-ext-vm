@@ -106,7 +106,7 @@ take_screenshot() {
     vm_is_running || { log_error "Cannot screenshot: VM '$VM_NAME' is not running"; return 1; }
     "${VIRSH[@]}" screenshot "$VM_DOMAIN" --file "$ppm" &>/dev/null
     [[ -f "$ppm" ]] || { log_error "virsh screenshot failed: no file produced"; return 1; }
-    magick "$ppm" "$png" 2>/dev/null
+    img_convert "$ppm" "$png" 2>/dev/null
     rm -f "$ppm"
     [[ -f "$png" ]] || { log_error "Image conversion failed"; return 1; }
     gev_event screenshot path="$png"
@@ -168,7 +168,7 @@ screen_size() {
     local tmp size
     tmp=$(mktemp)
     "${VIRSH[@]}" screenshot "$VM_DOMAIN" --file "$tmp" &>/dev/null
-    size=$(magick identify -format '%w %h' "$tmp" 2>/dev/null) || true
+    size=$(img_size "$tmp" 2>/dev/null) || true
     rm -f "$tmp"
     [[ "$size" =~ ^[0-9]+\ [0-9]+$ ]] \
         || { log_error "Cannot read screen size of '$VM_NAME'"; return 1; }

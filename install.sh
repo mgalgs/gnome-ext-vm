@@ -12,13 +12,15 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 
 missing=()
-for tool in virsh virt-install qemu-img passt genisoimage magick rsync ssh scp flock curl; do
+for tool in virsh virt-install qemu-img passt genisoimage rsync ssh scp flock curl; do
     command -v "$tool" >/dev/null || missing+=("$tool")
 done
+command -v magick >/dev/null || command -v convert >/dev/null || missing+=(imagemagick)
 if (( ${#missing[@]} )); then
     echo "Missing host tools: ${missing[*]}"
     echo "  Arch:   pacman -S libvirt qemu-full virt-install passt cdrtools imagemagick rsync"
     echo "  Fedora: dnf install libvirt qemu-kvm virt-install passt genisoimage ImageMagick rsync"
+    echo "  Debian/Ubuntu: apt install libvirt-daemon-system qemu-system-x86 virtinst passt genisoimage imagemagick rsync"
 fi
 command -v virt-viewer >/dev/null || echo "Optional: virt-viewer (for gnome-ext-vm viewer)"
 

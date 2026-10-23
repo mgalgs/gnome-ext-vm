@@ -38,6 +38,17 @@ log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
 log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()       { log_error "$*"; exit 2; }
 
+# ImageMagick 7 is `magick`; Debian and Ubuntu still ship 6 (`convert`,
+# `identify`).
+img_convert() {
+    if command -v magick &>/dev/null; then magick "$1" "$2"; else convert "$1" "$2"; fi
+}
+img_size() {
+    local id=(identify)
+    command -v magick &>/dev/null && id=(magick identify)
+    "${id[@]}" -format '%w %h' "$1"
+}
+
 ensure_dirs() {
     mkdir -p "$GEV_IMAGES" "$GEV_DISKS" "$(dirname "$GEV_KEY")" "$GEV_LAYERS" "$GEV_LOCKS"
 }
